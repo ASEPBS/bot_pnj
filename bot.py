@@ -1,6 +1,6 @@
 import os
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from openai import OpenAI
 
 # Ambil token dari environment variables
@@ -27,14 +27,12 @@ def handle_message(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(bot_reply)
 
 def main() -> None:
-    updater = Updater(TELEGRAM_TOKEN)
-    dispatcher = updater.dispatcher
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
