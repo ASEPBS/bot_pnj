@@ -1,6 +1,6 @@
 import os
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
 from openai import OpenAI
 
 # Ambil token dari environment variables
@@ -18,7 +18,7 @@ def handle_message(update: Update, context: CallbackContext) -> None:
 
     # Kirim ke GPT untuk diproses
     response = openai.Completion.create(
-        engine="davinci", # Atau engine GPT yang kamu mau
+        engine="davinci",  # Atau engine GPT yang kamu mau
         prompt=user_message,
         max_tokens=50
     )
@@ -31,7 +31,7 @@ def main() -> None:
     dispatcher = updater.dispatcher
 
     dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     updater.start_polling()
     updater.idle()
