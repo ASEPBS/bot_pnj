@@ -18,7 +18,7 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 
     # Kirim ke GPT untuk diproses
     response = openai.completions.create(
-        model="text-davinci-003",  # Atau model GPT yang kamu mau
+        model="gpt-3.5-turbo",  # Atau model GPT yang kamu mau
         prompt=user_message,
         max_tokens=50
     )
