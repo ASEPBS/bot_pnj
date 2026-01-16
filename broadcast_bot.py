@@ -10,7 +10,7 @@ from aiogram.types import Message
 import psycopg
 from psycopg.rows import tuple_row
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8527557467:AAEGWLZkeMOFj9ICUUvk3kNm6A8U8ZRhuLc").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8527557467:AAGdn5xkjPdBBWIF7p9tai_jJ5KBdg9s8_U").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:MJyOIpRWztHmdzSueQuMGTJGuMUGILQz@trolley.proxy.rlwy.net:27772/railway").strip()
 
 # contoh: "5577603728,6016383456"
