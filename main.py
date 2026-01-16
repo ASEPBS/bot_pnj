@@ -19,15 +19,15 @@ import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 
-# =========================================================
-# CONFIG via Railway Variables (TANPA dotenv / TANPA file)
-# =========================================================
+# =========================
+# CONFIG (Railway Variables)
+# =========================
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
-CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip() or "0")
+CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "").strip() or "0")
+BOT_USERNAME = (os.getenv("BOT_USERNAME") or "-1003642090936").strip().lstrip("@")
 DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:MWhogDSErtDIdHfJZwOinpUmLpGTVGQv@shortline.proxy.rlwy.net:18828/railway").strip()
 
-# Owner IDs (comma-separated): "5577,6016"
+# Owner IDs (comma-separated)
 OWNER_IDS = set()
 _raw_owner = (os.getenv("OWNER_IDS") or "").strip()
 for part in _raw_owner.split(","):
@@ -35,39 +35,39 @@ for part in _raw_owner.split(","):
     if part:
         OWNER_IDS.add(int(part))
 
-BROADCAST_RATE = float((os.getenv("BROADCAST_RATE") or "20").strip())      # msg/sec (target)
-BROADCAST_BATCH = int((os.getenv("BROADCAST_BATCH") or "2000").strip())    # batch fetch user ids
+# Broadcast tuning
+BROADCAST_RATE = float((os.getenv("BROADCAST_RATE") or "20").strip())  # msg/sec (aman)
+BROADCAST_BATCH = int((os.getenv("BROADCAST_BATCH") or "2000").strip())
 
-
-# =========================================================
+# =========================
 # REQUIRED JOIN CHANNELS (MAX 5)
-# - id: untuk private channel: -100xxxxxxxxxx (INT)
-# - url: link join (public channel / invite link)
-# =========================================================
+# id sebaiknya INT untuk -100xxxx (private channel)
+# atau bisa "@username" untuk public channel
+# =========================
 REQUIRED_CHANNELS = [
-    {"id": -1002268843879, "name": "HEPINI OFFICIAL", "url": "https://t.me/hepiniofc"},
-    {"id": -1003692828104, "name": "Ruang Backup", "url": "https://t.me/hepini_ofcl"},
+    {"id": "-1002268843879", "name": "HEPINI OFFICIAL", "url": "https://t.me/hepiniofc/1689"},
+    {"id": "-1003692828104", "name": "Ruang Backup", "url": "https://t.me/hepini_ofcl/3"},
     # maksimal 5 item
 ]
 
-# =========================================================
+# =========================
 # VALIDATION
-# =========================================================
+# =========================
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN belum di-set di Railway Variables.")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL belum di-set di Railway Variables.")
+    raise RuntimeError("BOT_TOKEN belum di-set.")
 if CHANNEL_ID == 0:
     raise RuntimeError("CHANNEL_ID belum di-set.")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL belum di-set.")
 if not OWNER_IDS:
     raise RuntimeError("OWNER_IDS belum di-set.")
 if len(REQUIRED_CHANNELS) > 5:
     raise RuntimeError("REQUIRED_CHANNELS maksimal 5 item.")
 
 
-# =========================================================
+# =========================
 # HELPERS
-# =========================================================
+# =========================
 def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
@@ -75,6 +75,8 @@ def make_slug() -> str:
     return secrets.token_urlsafe(8).replace("-", "").replace("_", "")[:12]
 
 def gate_text() -> str:
+    if not REQUIRED_CHANNELS:
+        return ""
     names = "\n".join([f"• {c['name']}" for c in REQUIRED_CHANNELS])
     return (
         "⚠️ Untuk melanjutkan, kamu wajib join dulu ke channel berikut:\n\n"
@@ -91,8 +93,25 @@ def join_keyboard(slug: str | None):
     kb.adjust(1)
     return kb.as_markup()
 
+async def is_joined_all(bot: Bot, user_id: int) -> bool:
+    if not REQUIRED_CHANNELS:
+        return True
+
+    for ch in REQUIRED_CHANNELS:
+        chat = ch["id"]
+        try:
+            member = await bot.get_chat_member(chat_id=chat, user_id=user_id)
+            status = getattr(member, "status", None)
+            if status in ("left", "kicked") or status is None:
+                return False
+        except Exception:
+            # bot tidak bisa cek membership (umumnya karena bot tidak ada di channel private)
+            return False
+
+    return True
+
 class RateLimiter:
-    """Limiter sederhana: target N messages/sec"""
+    """Global rate limiter: target N msg/sec."""
     def __init__(self, per_sec: float):
         self.min_interval = 1.0 / max(per_sec, 1.0)
         self._lock = asyncio.Lock()
@@ -106,26 +125,10 @@ class RateLimiter:
                 await asyncio.sleep(wait_for)
             self._last = time.monotonic()
 
-async def is_joined_all(bot: Bot, user_id: int) -> bool:
-    if not REQUIRED_CHANNELS:
-        return True
 
-    for ch in REQUIRED_CHANNELS:
-        chat_id = ch["id"]
-        try:
-            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            status = getattr(member, "status", None)
-            if status in ("left", "kicked") or status is None:
-                return False
-        except Exception:
-            # bot tidak bisa cek (misalnya bot belum ada di channel private) => anggap gagal
-            return False
-    return True
-
-
-# =========================================================
+# =========================
 # DB (PostgreSQL)
-# =========================================================
+# =========================
 pool = AsyncConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
@@ -134,20 +137,20 @@ pool = AsyncConnectionPool(
 )
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS users (
-  user_id BIGINT PRIMARY KEY,
-  username TEXT,
-  first_name TEXT,
-  last_name TEXT,
-  last_start TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS files (
   slug TEXT PRIMARY KEY,
   channel_id BIGINT NOT NULL,
   channel_message_id BIGINT NOT NULL,
   uploaded_by BIGINT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  user_id BIGINT PRIMARY KEY,
+  username TEXT,
+  first_name TEXT,
+  last_name TEXT,
+  last_start TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_last_start ON users(last_start);
@@ -188,7 +191,7 @@ async def db_delete_user(user_id: int):
             await cur.execute("DELETE FROM users WHERE user_id = %s;", (user_id,))
         await conn.commit()
 
-async def db_insert_file(slug: str, channel_id: int, channel_message_id: int, uploaded_by: int):
+async def db_put_file(slug: str, channel_id: int, channel_message_id: int, uploaded_by: int):
     sql = """
     INSERT INTO files (slug, channel_id, channel_message_id, uploaded_by)
     VALUES (%s, %s, %s, %s);
@@ -208,9 +211,9 @@ async def db_get_file(slug: str):
                 return None
             return int(row[0]), int(row[1])
 
-async def db_iter_user_ids(batch_size: int):
+async def db_iter_user_ids(batch_size: int = 2000):
     """
-    Keyset pagination (lebih efisien daripada OFFSET untuk 100k+ user).
+    Generator async: ambil user_id batch-by-batch tanpa OFFSET (lebih kuat untuk 100k+).
     """
     last_id = 0
     while True:
@@ -235,9 +238,9 @@ async def db_iter_user_ids(batch_size: int):
             last_id = uid
 
 
-# =========================================================
-# BOT APP
-# =========================================================
+# =========================
+# BOT
+# =========================
 async def main():
     await db_init()
 
@@ -245,17 +248,34 @@ async def main():
     dp = Dispatcher()
     limiter = RateLimiter(BROADCAST_RATE)
 
-    async def send_file_to_user(chat_id: int, slug: str):
+    async def send_file_to_user(user_chat_id: int, slug: str, origin_msg: Message | None = None):
         found = await db_get_file(slug)
         if not found:
-            await bot.send_message(chat_id, "❌ File tidak ditemukan / link sudah tidak valid.")
+            text = "❌ File tidak ditemukan / link sudah tidak valid."
+            if origin_msg:
+                await origin_msg.answer(text)
+            else:
+                await bot.send_message(user_chat_id, text)
             return
+
         ch_id, ch_msg_id = found
-        await bot.copy_message(chat_id=chat_id, from_chat_id=ch_id, message_id=ch_msg_id)
+        try:
+            await bot.copy_message(
+                chat_id=user_chat_id,
+                from_chat_id=ch_id,
+                message_id=ch_msg_id,
+            )
+        except Exception as e:
+            text = f"❌ Gagal mengirim file. ({type(e).__name__})"
+            if origin_msg:
+                await origin_msg.answer(text)
+            else:
+                await bot.send_message(user_chat_id, text)
 
     # -------- /start --------
     @dp.message(CommandStart())
     async def start_handler(message: Message):
+        # simpan user ke DB setiap start
         if message.from_user:
             await db_upsert_user(
                 user_id=message.from_user.id,
@@ -268,14 +288,18 @@ async def main():
         slug = parts[1].strip() if len(parts) > 1 else None
         uid = message.from_user.id if message.from_user else 0
 
-        # Gate join untuk non-owner
+        # join gate untuk non-owner
         if (not is_owner(uid)) and REQUIRED_CHANNELS:
             ok = await is_joined_all(bot, uid)
             if not ok:
-                await message.answer(gate_text(), reply_markup=join_keyboard(slug), parse_mode="Markdown")
+                await message.answer(
+                    gate_text(),
+                    reply_markup=join_keyboard(slug),
+                    parse_mode="Markdown"
+                )
                 return
 
-        # Tanpa slug
+        # start tanpa slug
         if not slug:
             await message.answer(
                 "📦 Kirim file ke bot ini (khusus owner).\n"
@@ -283,20 +307,16 @@ async def main():
             )
             return
 
-        # Lolos gate -> langsung kirim file
-        try:
-            await send_file_to_user(message.chat.id, slug)
-        except Exception as e:
-            await message.answer(f"❌ Gagal mengirim file. ({type(e).__name__})")
+        # start dengan slug -> kirim file
+        await send_file_to_user(message.chat.id, slug, origin_msg=message)
 
-    # -------- callback verif join --------
+    # -------- callback join verification --------
     @dp.callback_query(F.data.startswith("check_join"))
     async def check_join_cb(call: CallbackQuery):
         uid = call.from_user.id if call.from_user else 0
         data = call.data or "check_join:"
         slug = data.split(":", 1)[1].strip() if ":" in data else ""
 
-        # Owner bypass
         if is_owner(uid):
             await call.answer("✅ Owner bypass", show_alert=False)
             if slug:
@@ -305,6 +325,11 @@ async def main():
                 except Exception:
                     pass
                 await send_file_to_user(uid, slug)
+            else:
+                try:
+                    await call.message.edit_text("✅ Kamu owner.")
+                except Exception:
+                    pass
             return
 
         ok = await is_joined_all(call.bot, uid)
@@ -320,13 +345,16 @@ async def main():
             except Exception:
                 pass
             await send_file_to_user(uid, slug)
-        else:
-            try:
-                await call.message.edit_text("✅ Verifikasi berhasil.")
-            except Exception:
-                pass
+            return
 
-    # -------- /users (owner) --------
+        try:
+            await call.message.edit_text("✅ Verifikasi berhasil.")
+        except Exception:
+            pass
+
+    # =========================
+    # ADMIN COMMANDS
+    # =========================
     @dp.message(Command("users"))
     async def users_cmd(message: Message):
         uid = message.from_user.id if message.from_user else 0
@@ -335,7 +363,6 @@ async def main():
         total = await db_count_users()
         await message.answer(f"👤 Total user tersimpan: {total}")
 
-    # -------- /broadcast (owner, reply) --------
     @dp.message(Command("broadcast"))
     async def broadcast_cmd(message: Message):
         uid = message.from_user.id if message.from_user else 0
@@ -354,18 +381,18 @@ async def main():
         await message.answer(
             f"🚀 Broadcast dimulai ke {total} user.\n"
             f"Rate: ~{int(BROADCAST_RATE)} msg/detik.\n"
-            "User yang block bot / invalid akan dihapus dari database."
+            "User yang block bot / invalid akan DIHAPUS dari database."
         )
-
-        src_chat_id = message.chat.id
-        src_msg_id = message.reply_to_message.message_id
 
         sent = 0
         deleted = 0
         failed = 0
         processed = 0
 
-        async for target_id in db_iter_user_ids(BROADCAST_BATCH):
+        src_chat_id = message.chat.id
+        src_msg_id = message.reply_to_message.message_id
+
+        async for target_id in db_iter_user_ids(batch_size=BROADCAST_BATCH):
             processed += 1
             await limiter.wait()
 
@@ -413,10 +440,13 @@ async def main():
             "✅ Broadcast selesai.\n"
             f"✅ Terkirim: {sent}\n"
             f"🗑️ Dihapus (block/invalid): {deleted}\n"
-            f"⚠️ Gagal lain: {failed}"
+            f"⚠️ Gagal lain: {failed}\n"
+            f"🎯 Total target awal: {total}"
         )
 
-    # -------- owner upload --------
+    # =========================
+    # OWNER UPLOAD
+    # =========================
     @dp.message(
         F.content_type.in_({"document", "video", "audio", "voice", "photo", "animation", "sticker"})
         | F.video_note
@@ -427,6 +457,7 @@ async def main():
             await message.answer("⛔ Kamu tidak punya akses upload.")
             return
 
+        # copy ke channel DB
         try:
             copied = await bot.copy_message(
                 chat_id=CHANNEL_ID,
@@ -437,11 +468,11 @@ async def main():
             await message.answer(f"❌ Gagal menyimpan ke channel DB. ({type(e).__name__})")
             return
 
+        # simpan slug -> channel_message_id
         slug = make_slug()
-
         for _ in range(3):
             try:
-                await db_insert_file(slug, CHANNEL_ID, copied.message_id, uid)
+                await db_put_file(slug, int(CHANNEL_ID), int(copied.message_id), int(uid))
                 break
             except psycopg.errors.UniqueViolation:
                 slug = make_slug()
@@ -453,13 +484,13 @@ async def main():
             link = f"https://t.me/{BOT_USERNAME}?start={slug}"
             await message.answer(f"✅ Tersimpan!\n🔗 Link publik:\n{link}")
         else:
-            await message.answer(f"✅ Tersimpan!\nSlug: {slug}\n(Set BOT_USERNAME biar link otomatis)")
+            await message.answer("✅ Tersimpan! (Set BOT_USERNAME untuk link otomatis)")
 
     @dp.message()
     async def fallback(message: Message):
         uid = message.from_user.id if message.from_user else 0
         if is_owner(uid):
-            await message.answer("Kirim file untuk disimpan, atau reply file lalu /broadcast untuk broadcast.")
+            await message.answer("Kirim file (document/video/audio/photo) untuk disimpan, atau reply lalu /broadcast.")
         else:
             await message.answer("Buka link file yang kamu punya ya (t.me/<bot>?start=...).")
 
