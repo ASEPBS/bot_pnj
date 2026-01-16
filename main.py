@@ -30,7 +30,7 @@ load_dotenv("config.env")  # di Railway variables tetap kebaca, lokal pakai file
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
 CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip() or "0")
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:MWhogDSErtDIdHfJZwOinpUmLpGTVGQv@shortline.proxy.rlwy.net:18828/railway").strip()
 
 OWNER_IDS = set()
 _raw_owner = (os.getenv("OWNER_IDS") or "").strip()
