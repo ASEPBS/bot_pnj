@@ -22,13 +22,13 @@ from psycopg_pool import AsyncConnectionPool
 # =========================
 # CONFIG (Railway Variables)
 # =========================
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or "8495830935:AAFQP9hOq31jFUdvTZs4YGQlEdJM_S05uq8").strip()
 CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip() or "0")
-BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+BOT_USERNAME = (os.getenv("BOT_USERNAME") or "hepini_storage_bot").strip().lstrip("@")
+DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:TmZOisFFQfwkFdaVlfauVhrlWCRphGVW@metro.proxy.rlwy.net:43344/railway").strip()
 
 OWNER_IDS = set()
-_raw_owner = (os.getenv("OWNER_IDS") or "").strip()
+_raw_owner = (os.getenv("OWNER_IDS") or "5577603728,6016383456").strip()
 for part in _raw_owner.split(","):
     part = part.strip()
     if part:
