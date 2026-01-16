@@ -25,7 +25,7 @@ from psycopg_pool import AsyncConnectionPool
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "").strip() or "0")
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or "-1003642090936").strip().lstrip("@")
-DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:MWhogDSErtDIdHfJZwOinpUmLpGTVGQv@shortline.proxy.rlwy.net:18828/railway").strip()
+DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:TmZOisFFQfwkFdaVlfauVhrlWCRphGVW@metro.proxy.rlwy.net:43344/railway").strip()
 
 # Owner IDs (comma-separated)
 OWNER_IDS = set()
