@@ -14,7 +14,7 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "hepini_file_bot").strip().lstrip("@") 
 
 # Owner IDs (comma-separated), contoh: "5577603728,6016383456"
 OWNER_IDS = set()
-_raw_owner = os.getenv("OWNER_IDS", "5577603728").strip()
+_raw_owner = os.getenv("OWNER_IDS", "5577603728,6016383456").strip()
 for part in _raw_owner.split(","):
     part = part.strip()
     if part:
