@@ -15,7 +15,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # CONFIG
 # =========================
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "").strip())
+CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip())
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
 
 # Owner IDs (comma-separated)
