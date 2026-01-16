@@ -8,9 +8,9 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "").strip())  # contoh: -1003642090936
-BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")  # contoh: bico_storage_bot
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8527557467:AAGdn5xkjPdBBWIF7p9tai_jJ5KBdg9s8_U").strip()
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003642090936").strip())  # contoh: -1003642090936
+BOT_USERNAME = os.getenv("BOT_USERNAME", "hepini_file_bot").strip().lstrip("@")  # contoh: bico_storage_bot
 
 # Owner IDs (comma-separated), contoh: "5577603728,6016383456"
 OWNER_IDS = set()
