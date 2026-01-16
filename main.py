@@ -10,7 +10,7 @@ from aiogram.filters import CommandStart
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8495830935:AAFQP9hOq31jFUdvTZs4YGQlEdJM_S05uq8").strip()
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1003642090936").strip())  # contoh: -1003642090936
-BOT_USERNAME = os.getenv("BOT_USERNAME", "hepini_file_bot").strip().lstrip("@")  # contoh: bico_storage_bot
+BOT_USERNAME = os.getenv("BOT_USERNAME", "hepini_storage_bot").strip().lstrip("@")  # contoh: bico_storage_bot
 
 # Owner IDs (comma-separated), contoh: "5577603728,6016383456"
 OWNER_IDS = set()
