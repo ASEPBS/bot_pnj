@@ -4,46 +4,31 @@ import secrets
 import sqlite3
 from contextlib import closing
 
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 
-# =========================
-# LOAD CONFIG
-# =========================
-load_dotenv("config.env")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "").strip())  # contoh: -1003642090936
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")  # contoh: bico_storage_bot
 
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-CHANNEL_ID_RAW = (os.getenv("CHANNEL_ID") or "").strip()
-BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
-OWNER_IDS_RAW = (os.getenv("OWNER_IDS") or "").strip()
-DB_PATH = (os.getenv("DB_PATH") or "files.db").strip()
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN belum di-set di config.env")
-if not CHANNEL_ID_RAW:
-    raise RuntimeError("CHANNEL_ID belum di-set di config.env")
-if not OWNER_IDS_RAW:
-    raise RuntimeError("OWNER_IDS belum di-set di config.env")
-
-try:
-    CHANNEL_ID = int(CHANNEL_ID_RAW)
-except ValueError:
-    raise RuntimeError("CHANNEL_ID harus angka (contoh: -1003642090936)")
-
+# Owner IDs (comma-separated), contoh: "5577603728,6016383456"
 OWNER_IDS = set()
-for part in OWNER_IDS_RAW.split(","):
+_raw_owner = os.getenv("OWNER_IDS", "").strip()
+for part in _raw_owner.split(","):
     part = part.strip()
     if part:
         OWNER_IDS.add(int(part))
 
+DB_PATH = os.getenv("DB_PATH", "files.db").strip()  # default local sqlite
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN belum di-set")
+if not OWNER_IDS:
+    raise RuntimeError("OWNER_IDS belum di-set")
 if not BOT_USERNAME:
     print("PERINGATAN: BOT_USERNAME belum di-set. Link share tidak akan dibuat otomatis.")
 
-# =========================
-# HELPERS
-# =========================
 def make_slug() -> str:
     return secrets.token_urlsafe(8).replace("-", "").replace("_", "")[:12]
 
@@ -79,9 +64,6 @@ def db_get(slug: str):
             return None
         return int(row[0]), int(row[1])
 
-# =========================
-# BOT
-# =========================
 async def main():
     db_init()
 
@@ -91,8 +73,6 @@ async def main():
     @dp.message(CommandStart())
     async def start_handler(message: Message):
         parts = (message.text or "").split(maxsplit=1)
-
-        # start biasa
         if len(parts) == 1:
             await message.answer(
                 "📦 Kirim file ke bot ini (khusus owner).\n"
@@ -100,7 +80,6 @@ async def main():
             )
             return
 
-        # start dengan slug (public access)
         slug = parts[1].strip()
         found = db_get(slug)
         if not found:
@@ -143,6 +122,7 @@ async def main():
         try:
             db_put(slug, int(CHANNEL_ID), int(copied.message_id), int(uid))
         except sqlite3.IntegrityError:
+            # sangat jarang, tapi kalau slug tabrakan, coba ulang sekali
             slug = make_slug()
             db_put(slug, int(CHANNEL_ID), int(copied.message_id), int(uid))
 
@@ -151,7 +131,7 @@ async def main():
             link = f"https://t.me/{BOT_USERNAME}?start={slug}"
             await message.answer(f"✅ Tersimpan!\n🔗 Link publik:\n{link}")
         else:
-            await message.answer(f"✅ Tersimpan!\nSlug: {slug}\nSet BOT_USERNAME di config.env biar jadi link t.me otomatis.")
+            await message.answer(f"✅ Tersimpan!\nSlug: {slug}\nSet ENV BOT_USERNAME biar jadi link t.me otomatis.")
 
     @dp.message()
     async def fallback(message: Message):
