@@ -1,7 +1,6 @@
 import os
 import asyncio
 import time
-from typing import Optional, Tuple
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart, Command
@@ -9,161 +8,158 @@ from aiogram.types import Message
 
 import psycopg
 from psycopg.rows import tuple_row
+from dotenv import load_dotenv
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+# =========================
+# LOAD CONFIG
+# =========================
+load_dotenv("config.env")
 
-# contoh: "5577603728,6016383456"
-OWNER_IDS = set()
-for part in os.getenv("OWNER_IDS", "").split(","):
-    part = part.strip()
-    if part:
-        OWNER_IDS.add(int(part))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").lstrip("@")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+OWNER_IDS = {
+    int(x.strip())
+    for x in os.getenv("OWNER_IDS", "").split(",")
+    if x.strip()
+}
+
+BROADCAST_RATE = float(os.getenv("BROADCAST_RATE", "25"))
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN belum di-set")
+    raise RuntimeError("BOT_TOKEN belum di-set di config.env")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL belum di-set")
+    raise RuntimeError("DATABASE_URL belum di-set di config.env")
 if not OWNER_IDS:
-    raise RuntimeError("OWNER_IDS belum di-set")
+    raise RuntimeError("OWNER_IDS belum di-set di config.env")
 
-CREATE_TABLE_SQL = """
+# =========================
+# DATABASE SQL
+# =========================
+CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS subscribers (
   chat_id BIGINT PRIMARY KEY,
   username TEXT,
   first_name TEXT,
   last_name TEXT,
-  last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 """
 
-UPSERT_SQL = """
-INSERT INTO subscribers (chat_id, username, first_name, last_name, last_seen)
-VALUES (%s, %s, %s, %s, NOW())
+UPSERT = """
+INSERT INTO subscribers (chat_id, username, first_name, last_name)
+VALUES (%s, %s, %s, %s)
 ON CONFLICT (chat_id)
 DO UPDATE SET
   username = EXCLUDED.username,
   first_name = EXCLUDED.first_name,
-  last_name = EXCLUDED.last_name,
-  last_seen = NOW();
+  last_name = EXCLUDED.last_name;
 """
 
-COUNT_SQL = "SELECT COUNT(*) FROM subscribers;"
-SELECT_ALL_SQL = "SELECT chat_id FROM subscribers ORDER BY created_at ASC;"
+SELECT_ALL = "SELECT chat_id FROM subscribers ORDER BY created_at ASC;"
+COUNT_ALL = "SELECT COUNT(*) FROM subscribers;"
 
+# =========================
+# UTIL
+# =========================
 def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
 class RateLimiter:
-    """
-    Global limiter: target ~30 msg/sec (Telegram broadcast limit ~30/s).
-    We'll use ~25/s to be safe + still fast.
-    """
-    def __init__(self, per_sec: float = 25.0):
-        self.min_interval = 1.0 / per_sec
-        self._lock = asyncio.Lock()
-        self._last = 0.0
+    def __init__(self, rate_per_sec: float):
+        self.delay = 1 / rate_per_sec
+        self.last = 0
+        self.lock = asyncio.Lock()
 
     async def wait(self):
-        async with self._lock:
+        async with self.lock:
             now = time.monotonic()
-            wait_for = self.min_interval - (now - self._last)
-            if wait_for > 0:
-                await asyncio.sleep(wait_for)
-            self._last = time.monotonic()
+            delta = self.delay - (now - self.last)
+            if delta > 0:
+                await asyncio.sleep(delta)
+            self.last = time.monotonic()
 
-async def ensure_db():
+# =========================
+# DATABASE HELPERS
+# =========================
+async def db_exec(query, params=None):
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         async with conn.cursor() as cur:
-            await cur.execute(CREATE_TABLE_SQL)
+            await cur.execute(query, params)
         await conn.commit()
 
-async def upsert_subscriber(chat_id: int, username: Optional[str], first_name: Optional[str], last_name: Optional[str]):
-    async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(UPSERT_SQL, (chat_id, username, first_name, last_name))
-        await conn.commit()
-
-async def get_subscriber_count() -> int:
+async def db_fetchval(query):
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         async with conn.cursor(row_factory=tuple_row) as cur:
-            await cur.execute(COUNT_SQL)
+            await cur.execute(query)
             row = await cur.fetchone()
-            return int(row[0]) if row else 0
+            return row[0] if row else 0
 
-async def iter_chat_ids(batch_size: int = 1000):
-    """
-    Stream chat_ids without loading everything into memory.
-    """
+async def db_iter_chat_ids(batch=1000):
     async with await psycopg.AsyncConnection.connect(DATABASE_URL) as conn:
         async with conn.cursor(row_factory=tuple_row) as cur:
-            await cur.execute(SELECT_ALL_SQL)
+            await cur.execute(SELECT_ALL)
             while True:
-                rows = await cur.fetchmany(batch_size)
+                rows = await cur.fetchmany(batch)
                 if not rows:
                     break
-                for (chat_id,) in rows:
-                    yield int(chat_id)
+                for (cid,) in rows:
+                    yield int(cid)
 
+# =========================
+# MAIN BOT
+# =========================
 async def main():
-    await ensure_db()
+    await db_exec(CREATE_TABLE)
 
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(BOT_TOKEN)
     dp = Dispatcher()
-
-    limiter = RateLimiter(per_sec=25.0)  # safe & fast
+    limiter = RateLimiter(BROADCAST_RATE)
 
     @dp.message(CommandStart())
-    async def on_start(message: Message):
-        u = message.from_user
-        if u:
-            await upsert_subscriber(
-                chat_id=message.chat.id,
-                username=u.username,
-                first_name=u.first_name,
-                last_name=u.last_name,
-            )
-        await message.answer("✅ Bot aktif. Kamu sudah terdaftar untuk update/broadcast.")
+    async def start_cmd(msg: Message):
+        u = msg.from_user
+        await db_exec(
+            UPSERT,
+            (msg.chat.id, u.username if u else None, u.first_name if u else None, u.last_name if u else None)
+        )
+        await msg.answer("✅ Kamu sudah terdaftar.")
 
     @dp.message(Command("stats"))
-    async def stats(message: Message):
-        if not message.from_user or not is_owner(message.from_user.id):
+    async def stats_cmd(msg: Message):
+        if not msg.from_user or not is_owner(msg.from_user.id):
             return
-        total = await get_subscriber_count()
-        await message.answer(f"📊 Total subscriber tersimpan: {total}")
+        total = await db_fetchval(COUNT_ALL)
+        await msg.answer(f"📊 Total user: {total}")
 
     @dp.message(Command("broadcast"))
-    async def broadcast(message: Message):
-        if not message.from_user or not is_owner(message.from_user.id):
+    async def broadcast_cmd(msg: Message):
+        if not msg.from_user or not is_owner(msg.from_user.id):
             return
 
-        text = (message.text or "").split(maxsplit=1)
-        if len(text) < 2 or not text[1].strip():
-            await message.answer("Cara pakai: /broadcast isi pesan kamu")
+        parts = msg.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await msg.answer("Gunakan: /broadcast isi pesan")
             return
 
-        payload = text[1].strip()
+        text = parts[1]
+        total = await db_fetchval(COUNT_ALL)
+        await msg.answer(f"🚀 Broadcast ke {total} user dimulai...")
 
-        total = await get_subscriber_count()
-        await message.answer(f"🚀 Mulai broadcast ke {total} user...")
+        sent = failed = 0
 
-        sent = 0
-        failed = 0
-
-        async for chat_id in iter_chat_ids(batch_size=1000):
+        async for chat_id in db_iter_chat_ids():
             await limiter.wait()
             try:
-                await bot.send_message(chat_id, payload)
+                await bot.send_message(chat_id, text)
                 sent += 1
             except Exception as e:
-                # Handle 429 (Too Many Requests) -> aiogram biasanya raise TelegramRetryAfter
-                # Tapi agar robust, kita cek attribute retry_after jika ada.
-                retry_after = getattr(e, "retry_after", None)
-                if retry_after:
-                    await asyncio.sleep(float(retry_after) + 0.5)
+                retry = getattr(e, "retry_after", None)
+                if retry:
+                    await asyncio.sleep(float(retry))
                     try:
-                        await bot.send_message(chat_id, payload)
+                        await bot.send_message(chat_id, text)
                         sent += 1
                         continue
                     except Exception:
@@ -171,11 +167,7 @@ async def main():
                 else:
                     failed += 1
 
-            # Optional: progress tiap 500 kirim
-            if (sent + failed) % 500 == 0:
-                await message.answer(f"Progress: terkirim {sent}, gagal {failed} / {total}")
-
-        await message.answer(f"✅ Broadcast selesai.\nTerkirim: {sent}\nGagal: {failed}\nTotal target: {total}")
+        await msg.answer(f"✅ Selesai\nTerkirim: {sent}\nGagal: {failed}")
 
     await dp.start_polling(bot)
 
