@@ -25,9 +25,8 @@ from psycopg_pool import AsyncConnectionPool
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip() or "0")
 BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
-DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:TmZOisFFQfwkFdaVlfauVhrlWCRphGVW@metro.proxy.rlwy.net:43344/railway").strip()
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 
-# Owner IDs (comma-separated)
 OWNER_IDS = set()
 _raw_owner = (os.getenv("OWNER_IDS") or "").strip()
 for part in _raw_owner.split(","):
@@ -35,14 +34,12 @@ for part in _raw_owner.split(","):
     if part:
         OWNER_IDS.add(int(part))
 
-# Broadcast tuning
-BROADCAST_RATE = float((os.getenv("BROADCAST_RATE") or "20").strip())  # msg/sec (aman)
-BROADCAST_BATCH = int((os.getenv("BROADCAST_BATCH") or "2000").strip())
+BROADCAST_RATE = float((os.getenv("BROADCAST_RATE") or "20").strip())   # msg/sec
+BROADCAST_BATCH = int((os.getenv("BROADCAST_BATCH") or "2000").strip()) # fetch per batch
 
 # =========================
 # REQUIRED JOIN CHANNELS (MAX 5)
-# id sebaiknya INT untuk -100xxxx (private channel)
-# atau bisa "@username" untuk public channel
+# id bisa int (-100xxx) atau username "@channel"
 # =========================
 REQUIRED_CHANNELS = [
     {"id": "-1002268843879", "name": "HEPINI OFFICIAL", "url": "https://t.me/hepiniofc/1689"},
@@ -105,7 +102,7 @@ async def is_joined_all(bot: Bot, user_id: int) -> bool:
             if status in ("left", "kicked") or status is None:
                 return False
         except Exception:
-            # bot tidak bisa cek membership (umumnya karena bot tidak ada di channel private)
+            # bot gak bisa cek membership (umumnya bot tidak ada di channel private tsb)
             return False
 
     return True
@@ -127,15 +124,8 @@ class RateLimiter:
 
 
 # =========================
-# DB (PostgreSQL)
+# DB SCHEMA
 # =========================
-pool = AsyncConnectionPool(
-    conninfo=DATABASE_URL,
-    min_size=1,
-    max_size=10,
-    timeout=30,
-)
-
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS files (
   slug TEXT PRIMARY KEY,
@@ -157,91 +147,99 @@ CREATE INDEX IF NOT EXISTS idx_users_last_start ON users(last_start);
 CREATE INDEX IF NOT EXISTS idx_users_user_id ON users(user_id);
 """
 
-async def db_init():
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(SCHEMA_SQL)
-        await conn.commit()
 
-async def db_upsert_user(user_id: int, username: str | None, first_name: str | None, last_name: str | None):
-    sql = """
-    INSERT INTO users (user_id, username, first_name, last_name, last_start)
-    VALUES (%s, %s, %s, %s, NOW())
-    ON CONFLICT (user_id) DO UPDATE SET
-      username = EXCLUDED.username,
-      first_name = EXCLUDED.first_name,
-      last_name = EXCLUDED.last_name,
-      last_start = NOW();
-    """
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (user_id, username, first_name, last_name))
-        await conn.commit()
+# =========================
+# MAIN
+# =========================
+async def main():
+    # ✅ IMPORTANT: create pool inside loop / open later
+    pool = AsyncConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=1,
+        max_size=10,
+        timeout=30,
+        open=False,  # <= FIX utama
+    )
+    await pool.open()
 
-async def db_count_users() -> int:
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT COUNT(*) FROM users;")
-            row = await cur.fetchone()
-            return int(row[0]) if row else 0
+    async def db_init():
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(SCHEMA_SQL)
+            await conn.commit()
 
-async def db_delete_user(user_id: int):
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("DELETE FROM users WHERE user_id = %s;", (user_id,))
-        await conn.commit()
-
-async def db_put_file(slug: str, channel_id: int, channel_message_id: int, uploaded_by: int):
-    sql = """
-    INSERT INTO files (slug, channel_id, channel_message_id, uploaded_by)
-    VALUES (%s, %s, %s, %s);
-    """
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (slug, channel_id, channel_message_id, uploaded_by))
-        await conn.commit()
-
-async def db_get_file(slug: str):
-    sql = "SELECT channel_id, channel_message_id FROM files WHERE slug = %s;"
-    async with pool.connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (slug,))
-            row = await cur.fetchone()
-            if not row:
-                return None
-            return int(row[0]), int(row[1])
-
-async def db_iter_user_ids(batch_size: int = 2000):
-    """
-    Generator async: ambil user_id batch-by-batch tanpa OFFSET (lebih kuat untuk 100k+).
-    """
-    last_id = 0
-    while True:
+    async def db_upsert_user(user_id: int, username: str | None, first_name: str | None, last_name: str | None):
         sql = """
-        SELECT user_id
-        FROM users
-        WHERE user_id > %s
-        ORDER BY user_id ASC
-        LIMIT %s;
+        INSERT INTO users (user_id, username, first_name, last_name, last_start)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          username = EXCLUDED.username,
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name,
+          last_start = NOW();
         """
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (last_id, batch_size))
-                rows = await cur.fetchall()
+                await cur.execute(sql, (user_id, username, first_name, last_name))
+            await conn.commit()
 
-        if not rows:
-            break
+    async def db_count_users() -> int:
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM users;")
+                row = await cur.fetchone()
+                return int(row[0]) if row else 0
 
-        for (uid,) in rows:
-            uid = int(uid)
-            yield uid
-            last_id = uid
+    async def db_delete_user(user_id: int):
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM users WHERE user_id = %s;", (user_id,))
+            await conn.commit()
 
+    async def db_put_file(slug: str, channel_id: int, channel_message_id: int, uploaded_by: int):
+        sql = """
+        INSERT INTO files (slug, channel_id, channel_message_id, uploaded_by)
+        VALUES (%s, %s, %s, %s);
+        """
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (slug, channel_id, channel_message_id, uploaded_by))
+            await conn.commit()
 
-# =========================
-# BOT
-# =========================
-async def main():
+    async def db_get_file(slug: str):
+        sql = "SELECT channel_id, channel_message_id FROM files WHERE slug = %s;"
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (slug,))
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return int(row[0]), int(row[1])
+
+    async def db_iter_user_ids(batch_size: int = 2000):
+        # tanpa OFFSET (lebih aman untuk 100k+)
+        last_id = 0
+        while True:
+            sql = """
+            SELECT user_id
+            FROM users
+            WHERE user_id > %s
+            ORDER BY user_id ASC
+            LIMIT %s;
+            """
+            async with pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql, (last_id, batch_size))
+                    rows = await cur.fetchall()
+
+            if not rows:
+                break
+
+            for (uid,) in rows:
+                uid = int(uid)
+                yield uid
+                last_id = uid
+
     await db_init()
 
     bot = Bot(token=BOT_TOKEN)
@@ -275,7 +273,6 @@ async def main():
     # -------- /start --------
     @dp.message(CommandStart())
     async def start_handler(message: Message):
-        # simpan user ke DB setiap start
         if message.from_user:
             await db_upsert_user(
                 user_id=message.from_user.id,
@@ -288,18 +285,13 @@ async def main():
         slug = parts[1].strip() if len(parts) > 1 else None
         uid = message.from_user.id if message.from_user else 0
 
-        # join gate untuk non-owner
+        # gate join untuk non-owner
         if (not is_owner(uid)) and REQUIRED_CHANNELS:
             ok = await is_joined_all(bot, uid)
             if not ok:
-                await message.answer(
-                    gate_text(),
-                    reply_markup=join_keyboard(slug),
-                    parse_mode="Markdown"
-                )
+                await message.answer(gate_text(), reply_markup=join_keyboard(slug), parse_mode="Markdown")
                 return
 
-        # start tanpa slug
         if not slug:
             await message.answer(
                 "📦 Kirim file ke bot ini (khusus owner).\n"
@@ -307,10 +299,9 @@ async def main():
             )
             return
 
-        # start dengan slug -> kirim file
         await send_file_to_user(message.chat.id, slug, origin_msg=message)
 
-    # -------- callback join verification --------
+    # -------- callback join verify --------
     @dp.callback_query(F.data.startswith("check_join"))
     async def check_join_cb(call: CallbackQuery):
         uid = call.from_user.id if call.from_user else 0
@@ -352,9 +343,7 @@ async def main():
         except Exception:
             pass
 
-    # =========================
-    # ADMIN COMMANDS
-    # =========================
+    # -------- /users (owner) --------
     @dp.message(Command("users"))
     async def users_cmd(message: Message):
         uid = message.from_user.id if message.from_user else 0
@@ -363,6 +352,7 @@ async def main():
         total = await db_count_users()
         await message.answer(f"👤 Total user tersimpan: {total}")
 
+    # -------- /broadcast (owner, reply) --------
     @dp.message(Command("broadcast"))
     async def broadcast_cmd(message: Message):
         uid = message.from_user.id if message.from_user else 0
@@ -405,7 +395,6 @@ async def main():
                 sent += 1
 
             except TelegramRetryAfter as e:
-                # Telegram minta jeda (flood control)
                 await asyncio.sleep(float(e.retry_after) + 0.5)
                 try:
                     await bot.copy_message(
@@ -421,7 +410,6 @@ async def main():
                     failed += 1
 
             except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
-                # block bot / chat invalid / user deactivated -> delete dari DB
                 await db_delete_user(target_id)
                 deleted += 1
 
@@ -432,21 +420,19 @@ async def main():
                 await message.answer(
                     f"Progress: {processed}/{total}\n"
                     f"✅ Terkirim: {sent}\n"
-                    f"🗑️ Dihapus (block/invalid): {deleted}\n"
+                    f"🗑️ Dihapus: {deleted}\n"
                     f"⚠️ Gagal lain: {failed}"
                 )
 
         await message.answer(
             "✅ Broadcast selesai.\n"
             f"✅ Terkirim: {sent}\n"
-            f"🗑️ Dihapus (block/invalid): {deleted}\n"
+            f"🗑️ Dihapus: {deleted}\n"
             f"⚠️ Gagal lain: {failed}\n"
             f"🎯 Total target awal: {total}"
         )
 
-    # =========================
-    # OWNER UPLOAD
-    # =========================
+    # -------- owner upload --------
     @dp.message(
         F.content_type.in_({"document", "video", "audio", "voice", "photo", "animation", "sticker"})
         | F.video_note
@@ -457,7 +443,6 @@ async def main():
             await message.answer("⛔ Kamu tidak punya akses upload.")
             return
 
-        # copy ke channel DB
         try:
             copied = await bot.copy_message(
                 chat_id=CHANNEL_ID,
@@ -468,7 +453,6 @@ async def main():
             await message.answer(f"❌ Gagal menyimpan ke channel DB. ({type(e).__name__})")
             return
 
-        # simpan slug -> channel_message_id
         slug = make_slug()
         for _ in range(3):
             try:
@@ -490,11 +474,14 @@ async def main():
     async def fallback(message: Message):
         uid = message.from_user.id if message.from_user else 0
         if is_owner(uid):
-            await message.answer("Kirim file (document/video/audio/photo) untuk disimpan, atau reply lalu /broadcast.")
+            await message.answer("Kirim file untuk disimpan, atau reply lalu /broadcast.")
         else:
             await message.answer("Buka link file yang kamu punya ya (t.me/<bot>?start=...).")
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await pool.close()
 
 
 if __name__ == "__main__":
