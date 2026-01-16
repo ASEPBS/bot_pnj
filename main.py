@@ -1,10 +1,7 @@
-import os
 import asyncio
 import secrets
 import time
 from datetime import datetime
-
-from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -22,55 +19,49 @@ import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 
-# =========================
-# LOAD ENV
-# =========================
-load_dotenv("config.env")  # di Railway variables tetap kebaca, lokal pakai file
+# =========================================================
+# HARD-CODED CONFIG (TANPA ENV)
+# =========================================================
+BOT_TOKEN = "PASTE_TOKEN_BOT_KAMU_DI_SINI"
+BOT_USERNAME = "hepini_file_bot"  # tanpa @
+CHANNEL_ID = -1003642090936
 
-BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
-BOT_USERNAME = (os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
-CHANNEL_ID = int((os.getenv("CHANNEL_ID") or "-1003642090936").strip() or "0")
-DATABASE_URL = (os.getenv("DATABASE_URL") or "postgresql://postgres:MWhogDSErtDIdHfJZwOinpUmLpGTVGQv@shortline.proxy.rlwy.net:18828/railway").strip()
+# PostgreSQL Railway (permanen)
+DATABASE_URL = "postgresql://postgres:MJyOIpRWztHmdzSueQuMGTJGuMUGILQz@trolley.proxy.rlwy.net:27772/railway"
 
-OWNER_IDS = set()
-_raw_owner = (os.getenv("OWNER_IDS") or "").strip()
-for part in _raw_owner.split(","):
-    part = part.strip()
-    if part:
-        OWNER_IDS.add(int(part))
+# Owner IDs (yang boleh upload + broadcast + cek users)
+OWNER_IDS = {5577603728, 6016383456}
 
-BROADCAST_RATE = float((os.getenv("BROADCAST_RATE") or "20").strip())   # msg/sec
-BROADCAST_BATCH = int((os.getenv("BROADCAST_BATCH") or "1000").strip()) # fetch db per batch
-
-
-# =========================
-# REQUIRED JOIN CHANNELS (MAX 5)
-# =========================
+# Wajib join 1..5 channel sebelum bisa akses file
+# NOTE:
+# - Untuk channel public: pakai "@username"
+# - Untuk channel private: pakai -100xxxxxxxxxx, dan BOT HARUS ADA DI CHANNEL ITU
 REQUIRED_CHANNELS = [
     {"id": "-1002268843879", "name": "HEPINI OFFICIAL", "url": "https://t.me/hepiniofc/1689"},
     {"id": "-1003692828104", "name": "Ruang Backup", "url": "https://t.me/hepini_ofcl/3"},
     # maksimal 5 item
 ]
 
+# Broadcast tuning
+BROADCAST_RATE = 20.0       # ~20 msg/detik (aman)
+BROADCAST_BATCH = 1000      # ambil user batch-by-batch (hemat RAM)
 
-# =========================
+# =========================================================
 # VALIDATION
-# =========================
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN belum di-set.")
+# =========================================================
+if not BOT_TOKEN or "PASTE_TOKEN" in BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN belum kamu isi.")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL belum di-set.")
-if CHANNEL_ID == 0:
-    raise RuntimeError("CHANNEL_ID belum di-set.")
+    raise RuntimeError("DATABASE_URL kosong.")
 if not OWNER_IDS:
-    raise RuntimeError("OWNER_IDS belum di-set.")
+    raise RuntimeError("OWNER_IDS kosong.")
 if len(REQUIRED_CHANNELS) > 5:
     raise RuntimeError("REQUIRED_CHANNELS maksimal 5 item.")
 
 
-# =========================
+# =========================================================
 # HELPERS
-# =========================
+# =========================================================
 def is_owner(user_id: int) -> bool:
     return user_id in OWNER_IDS
 
@@ -109,7 +100,6 @@ class RateLimiter:
                 await asyncio.sleep(wait_for)
             self._last = time.monotonic()
 
-
 async def is_joined_all(bot: Bot, user_id: int) -> bool:
     if not REQUIRED_CHANNELS:
         return True
@@ -122,14 +112,14 @@ async def is_joined_all(bot: Bot, user_id: int) -> bool:
             if status in ("left", "kicked") or status is None:
                 return False
         except Exception:
-            # jika bot tidak bisa cek member (mis. bot tidak ada di private channel) => anggap gagal
+            # bot tidak bisa cek member => anggap belum join
             return False
     return True
 
 
-# =========================
+# =========================================================
 # DB (PostgreSQL)
-# =========================
+# =========================================================
 pool = AsyncConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
@@ -214,6 +204,7 @@ async def db_get_file(slug: str):
 async def db_iter_user_ids(batch_size: int):
     """
     Async generator ambil user_id per batch untuk hemat RAM.
+    (OFFSET aman untuk 100k; kalau jutaan baru kita ganti cursor-based.)
     """
     offset = 0
     while True:
@@ -232,9 +223,9 @@ async def db_iter_user_ids(batch_size: int):
         offset += batch_size
 
 
-# =========================
+# =========================================================
 # BOT APP
-# =========================
+# =========================================================
 async def main():
     await db_init()
 
@@ -263,7 +254,6 @@ async def main():
 
         parts = (message.text or "").split(maxsplit=1)
         slug = parts[1].strip() if len(parts) > 1 else None
-
         uid = message.from_user.id if message.from_user else 0
 
         # Gate join untuk non-owner
@@ -273,7 +263,7 @@ async def main():
                 await message.answer(gate_text(), reply_markup=join_keyboard(slug), parse_mode="Markdown")
                 return
 
-        # Start tanpa slug
+        # Tanpa slug
         if not slug:
             await message.answer(
                 "📦 Kirim file ke bot ini (khusus owner).\n"
@@ -281,7 +271,7 @@ async def main():
             )
             return
 
-        # Sudah lolos gate -> langsung kirim file
+        # Dengan slug -> langsung kirim
         try:
             await send_file_to_user(message.chat.id, slug)
         except Exception as e:
@@ -375,7 +365,6 @@ async def main():
                 sent += 1
 
             except TelegramRetryAfter as e:
-                # tunggu sesuai retry_after
                 await asyncio.sleep(float(e.retry_after) + 0.5)
                 try:
                     await bot.copy_message(
@@ -384,23 +373,14 @@ async def main():
                         message_id=src_msg_id,
                     )
                     sent += 1
-                except (TelegramForbiddenError, TelegramNotFound) as ex2:
-                    await db_delete_user(target_id)
-                    deleted += 1
-                except TelegramBadRequest as ex2:
-                    # chat not found / user deactivated / dll
+                except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
                     await db_delete_user(target_id)
                     deleted += 1
                 except Exception:
                     failed += 1
 
-            except (TelegramForbiddenError, TelegramNotFound):
-                # user block bot / chat invalid -> delete dari DB
-                await db_delete_user(target_id)
-                deleted += 1
-
-            except TelegramBadRequest:
-                # sering terjadi kalau user deactivated / chat not found
+            except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest):
+                # block bot / chat invalid / user deactivated -> delete dari DB
                 await db_delete_user(target_id)
                 deleted += 1
 
@@ -443,9 +423,7 @@ async def main():
             await message.answer(f"❌ Gagal menyimpan ke channel DB. ({type(e).__name__})")
             return
 
-        # simpan mapping slug -> msg di channel DB
         slug = make_slug()
-        # kalau tabrakan slug (jarang banget), coba ulang
         for _ in range(3):
             try:
                 await db_insert_file(slug, CHANNEL_ID, copied.message_id, uid)
@@ -456,17 +434,14 @@ async def main():
             await message.answer("❌ Gagal membuat slug unik. Coba lagi.")
             return
 
-        if BOT_USERNAME:
-            link = f"https://t.me/{BOT_USERNAME}?start={slug}"
-            await message.answer(f"✅ Tersimpan!\n🔗 Link publik:\n{link}")
-        else:
-            await message.answer(f"✅ Tersimpan!\nSlug: {slug}\n(Set BOT_USERNAME untuk link otomatis)")
+        link = f"https://t.me/{BOT_USERNAME}?start={slug}" if BOT_USERNAME else f"Slug: {slug}"
+        await message.answer(f"✅ Tersimpan!\n🔗 Link publik:\n{link}")
 
     @dp.message()
     async def fallback(message: Message):
         uid = message.from_user.id if message.from_user else 0
         if is_owner(uid):
-            await message.answer("Kirim file untuk disimpan, atau reply file lalu /broadcast untuk broadcast.")
+            await message.answer("Kirim file untuk disimpan. Untuk broadcast: reply pesan/file lalu /broadcast.")
         else:
             await message.answer("Buka link file yang kamu punya ya (t.me/<bot>?start=...).")
 
